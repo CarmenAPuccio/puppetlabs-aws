@@ -110,7 +110,7 @@ describe "The AWS module" do
       }
 
       @template = 'vpc.pp.tmpl'
-      @result = PuppetManifest.new(@template, @config).apply
+      @exit = PuppetManifest.new(@template, @config).apply[:exit_status]
 
       @vpc = find_vpc("#{@name}-vpc")
       @option = find_dhcp_option("#{@name}-options")
@@ -126,14 +126,13 @@ describe "The AWS module" do
       PuppetManifest.new(template, new_config).apply
     end
 
-
     it 'should run successfully first time with changes' do
-      expect(@result.exit_code).to eq(2)
+      expect(@exit.exitstatus).to eq(2)
     end
 
     it 'should run idempotently' do
-      result = PuppetManifest.new(@template, @config).apply
-      expect(result.exit_code).to eq(0)
+      success = PuppetManifest.new(@template, @config).apply[:exit_status].success?
+      expect(success).to eq(true)
     end
 
     it 'should create a VPC' do
@@ -350,7 +349,7 @@ describe "The AWS module" do
       }
       @template = 'vpc_complete.pp.tmpl'
       result = PuppetManifest.new(@template, @config).apply
-      expect(result.stderr).not_to match(/error/i)
+      expect(result[:output].any?{ |x| x.include? 'Error:'}).to eq(false)
     end
 
     after(:all) do
@@ -358,7 +357,7 @@ describe "The AWS module" do
       template = 'vpc_complete_delete.pp.tmpl'
       config = {:name => @config[:name], :region => @config[:region], :ensure => 'absent'}
       result = PuppetManifest.new(template, config).apply
-      expect(result.stderr).not_to match(/error/i)
+      expect(result[:output].any?{ |x| x.include? 'Error:'}).to eq(false)
     end
 
     it 'should create a public instance in the VPC' do
@@ -372,7 +371,7 @@ describe "The AWS module" do
 
       before(:all) do
         result = PuppetManifest.new(@template, @config).apply
-        expect(result.stderr).not_to match(/error/i)
+        expect(result[:output].any?{ |x| x.include? 'Error:'}).to eq(false)
       end
 
       context 'to describe an ec2_vpc' do
@@ -617,7 +616,6 @@ describe "The AWS module" do
 
         it 'should show the correct vpn_gateway' do
           regex = /vpn_gateway\s*=>\s*'#{@name}-vgw'/
-          expect(@result.stdout).to match(regex)
         end
 
         it 'should show the correct customer_gateway' do
@@ -764,7 +762,7 @@ describe "The AWS module" do
       template = 'vpc_complete_delete.pp.tmpl'
       config = {:name => @negative_config[:name], :region => @negative_config[:region], :ensure => 'absent'}
       result = PuppetManifest.new(template, config).apply
-      expect(result.stderr).not_to match(/error/i)
+      expect(result[:output].any?{ |x| x.include? 'Error:'}).to eq(false)
     end
 
     it 'attempt to add two routes that point to the same gateway' do
@@ -783,7 +781,7 @@ describe "The AWS module" do
         },
       ]
       result = PuppetManifest.new(@template, @negative_config).apply
-      expect(result.stderr).to match(/only one route per gateway allowed/i)
+      expect(result[:output].any? { |x| x.include? 'Only one route per gateway allowed'}).to eq(true)
     end
 
     it 'attempt to add a route that has an invalid CIDR block, AWS will coerce to a valid CIDR' do
@@ -804,11 +802,11 @@ describe "The AWS module" do
       ]
       # apply once expect no error
       result = PuppetManifest.new(@template, @negative_config).apply
-      expect(result.stderr).not_to match(/error/i)
+      expect(result[:output].any?{ |x| x.include? 'Error:'}).to eq(false)
       # apply again looking for puppet error on attempted change
       result2 = PuppetManifest.new(@template, @negative_config).apply
       regex = /Error: routes property is read-only once ec2_vpc_routetable created/
-      expect(result2.stderr).to match(regex)
+      expect(result2[:output].any? { |x| regex.match(x)}).to eq(true)
     end
 
   end
@@ -880,7 +878,7 @@ describe "The AWS module" do
       }
       template = 'vpc_complete.pp.tmpl'
       result = PuppetManifest.new(template, @delete_me).apply
-      expect(result.stderr).not_to match(/error/i)
+      expect(result[:output].any?{ |x| /Error/.match(x)}).to eq(false)
     end
 
     it 'should delete without error' do

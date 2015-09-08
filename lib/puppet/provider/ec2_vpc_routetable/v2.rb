@@ -34,39 +34,60 @@ Puppet::Type.type(:ec2_vpc_routetable).provide(:v2, :parent => PuppetX::Puppetla
   end
 
   def self.route_to_hash(region, route)
-    gateway_name = route.state == 'active' ? gateway_name_from_id(region, route.gateway_id) : nil
+    ec2 = ec2_client(region)
+    if route.state == 'active'
+      gateway = if route.gateway_id == 'local'
+        'local'
+      else
+        begin
+          igw_response = ec2.describe_internet_gateways(internet_gateway_ids: [route.gateway_id])
+          name_from_tag(igw_response.data.internet_gateways.first)
+        rescue Aws::EC2::Errors::InvalidInternetGatewayIDNotFound
+          begin
+            vgw_response = ec2.describe_vpn_gateways(vpn_gateway_ids: [route.gateway_id])
+            name_from_tag(vgw_response.data.vpn_gateways.first)
+          rescue Aws::EC2::Errors::InvalidVpnGatewayIDNotFound
+            nil
+          end
+        end
+      end
+    end
     hash = {
       'destination_cidr_block' => route.destination_cidr_block,
-      'gateway' => gateway_name,
+      'gateway' => gateway,
     }
-    gateway_name.nil? ? nil : hash
+    gateway.nil? ? nil : hash
   end
 
   def self.route_table_to_hash(region, table)
-    name = name_from_tag(table)
-    return {} unless name
+    ec2 = ec2_client(region)
+    vpc_response = ec2.describe_vpcs(vpc_ids: [table.vpc_id])
+    vpc_name_tag = vpc_response.data.vpcs.first.tags.detect { |tag| tag.key == 'Name' }
+
     routes = table.routes.collect do |route|
       route_to_hash(region, route)
-    end.compact
+    end
+
     {
-      name: name,
+      name: name_from_tag(table),
       id: table.route_table_id,
-      vpc: vpc_name_from_id(region, table.vpc_id),
+      vpc: vpc_name_tag ? vpc_name_tag.value : nil,
       ensure: :present,
-      routes: routes,
+      routes: routes.reject(&:nil?),
       region: region,
       tags: tags_for(table),
     }
   end
 
   def exists?
-    Puppet.info("Checking if Route table #{name} exists in #{target_region}")
+    dest_region = resource[:region] if resource
+    Puppet.info("Checking if Route table #{name} exists in #{dest_region || region}")
     @property_hash[:ensure] == :present
   end
 
   def create
-    Puppet.info("Creating Route table #{name} in #{target_region}")
-    ec2 = ec2_client(target_region)
+    Puppet.info("Creating Route table #{name}")
+    ec2 = ec2_client(resource[:region])
 
     routes = resource[:routes]
     routes = [routes] unless routes.is_a?(Array)
@@ -118,8 +139,10 @@ Puppet::Type.type(:ec2_vpc_routetable).provide(:v2, :parent => PuppetX::Puppetla
   end
 
   def destroy
-    Puppet.info("Deleting Route table #{name} in #{target_region}")
-    ec2_client(target_region).delete_route_table(route_table_id: @property_hash[:id])
+    region = @property_hash[:region]
+    Puppet.info("Deleting Route table #{name} in #{region}")
+    ec2_client(region).delete_route_table(route_table_id: @property_hash[:id])
     @property_hash[:ensure] = :absent
   end
 end
+

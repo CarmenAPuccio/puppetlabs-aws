@@ -22,5 +22,4 @@ infrastructure.
 * [Using IAM permissions](iam-profile) - an example IAM profile for
   controlling the API permissions required by the module
 * [Elastic IP Addresses](elastic-ip-addresses/) - attach existing elastic
-* [Create your own abstractions](create-your-own-abstractions/) - use
-  Puppet's defined types to better model your own infrastructure
+  IP addresses to instances managed by Puppet

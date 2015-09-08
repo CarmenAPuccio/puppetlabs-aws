@@ -132,8 +132,8 @@ describe "ec2_securitygroup" do
         :cidr     => '0.0.0.0/0'
       }]
       new_config = @config.dup.update({:ingress => new_rules})
-      result = PuppetManifest.new(@template, new_config).apply
-      expect(result.exit_code).to eq(2)
+      success = PuppetManifest.new(@template, new_config).apply[:exit_status].success?
+      expect(success).to eq(false)
 
       # should still have the original rules
       @group = get_group(@config[:name])
@@ -170,8 +170,8 @@ describe "ec2_securitygroup" do
       end
 
       it 'and should not fail to be applied multiple times' do
-        result = PuppetManifest.new(@template, @config_2).apply
-        expect(result.exit_code).to eq(0)
+        success = PuppetManifest.new(@template, @config_2).apply[:exit_status].success?
+        expect(success).to eq(true)
       end
     end
   end
@@ -224,19 +224,17 @@ describe "ec2_securitygroup" do
     end
 
     it 'and does not emit change notifications on a second run when the manifest ingress rule ordering does not match the one returned by AWS' do
-      result = PuppetManifest.new(@template, @config).apply
+      output = PuppetManifest.new(@template, @config).apply[:output]
       @group = get_group(@config[:name])
 
-      original_rules = @config[:ingress].sort { |a, b| [a[:port], a[:protocol]] <=> [b[:port], b[:protocol]] }
-      new_rules = @group[:ip_permissions].sort { |a, b| [a.to_port, a.ip_protocol] <=> [b.to_port, b.ip_protocol] }
-
       # Puppet code not loaded, so can't call format_ingress_rules on ec2_securitygroup type
-      original_rules.each_with_index do |rule,i|
-        expect_rule_matches(rule, new_rules[i])
-      end
+      expect_rule_matches(@config[:ingress][2], @group[:ip_permissions][0])
+      expect_rule_matches(@config[:ingress][1], @group[:ip_permissions][1])
+      expect_rule_matches(@config[:ingress][0], @group[:ip_permissions][2])
 
       # should still be considered insync despite ordering differences
-      expect(result.stdout).not_to match(/ingress changed/)
+      changed = output.any? { |l| l.match('ingress changed') }
+      expect(changed).to eq(false)
     end
   end
 
@@ -466,8 +464,8 @@ describe "ec2_securitygroup" do
           new_rules << rule
         end
         new_config = @config.dup.update({:ingress => new_rules})
-        result = PuppetManifest.new(@template, new_config).apply
-        expect(result.exit_code).to eq(2)
+        exit_status = PuppetManifest.new(@template, new_config).apply[:exit_status]
+        expect(exit_status.exitstatus).to eq(2)
 
         @group = get_group(@config[:name])
 

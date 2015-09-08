@@ -34,22 +34,24 @@ Puppet::Type.type(:ec2_vpc_subnet).provide(:v2, :parent => PuppetX::Puppetlabs::
   end
 
   def self.subnet_to_hash(region, subnet)
-    name = name_from_tag(subnet)
-    return {} unless name
     ec2 = ec2_client(region)
+    vpc_response = ec2.describe_vpcs(vpc_ids: [subnet.vpc_id])
+    vpc_name_tag = vpc_response.data.vpcs.first.tags.detect { |tag| tag.key == 'Name' }
+
     table_response = ec2.describe_route_tables(filters: [
       {name: 'association.subnet-id', values: [subnet.subnet_id]},
       {name: 'vpc-id', values: [subnet.vpc_id]},
     ])
-    table_name = table_response.data.route_tables.empty? ? nil : name_from_tag(table_response.data.route_tables.first)
+    tables = table_response.data.route_tables
+    table_name_tag = tables.empty? ? nil : tables.first.tags.detect { |tag| tag.key == 'Name' }
 
     {
-      name: name,
-      route_table: table_name,
+      name: name_from_tag(subnet),
+      route_table: table_name_tag ? table_name_tag.value : nil,
       id: subnet.subnet_id,
       cidr_block: subnet.cidr_block,
       availability_zone: subnet.availability_zone,
-      vpc: vpc_name_from_id(region, subnet.vpc_id),
+      vpc: vpc_name_tag ? vpc_name_tag.value : nil,
       ensure: :present,
       region: region,
       map_public_ip_on_launch: subnet.map_public_ip_on_launch,
@@ -58,13 +60,14 @@ Puppet::Type.type(:ec2_vpc_subnet).provide(:v2, :parent => PuppetX::Puppetlabs::
   end
 
   def exists?
-    Puppet.info("Checking if subnet #{name} exists in #{target_region}")
+    dest_region = resource[:region] if resource
+    Puppet.info("Checking if subnet #{name} exists in #{dest_region || region }")
     @property_hash[:ensure] == :present
   end
 
   def create
-    Puppet.info("Creating subnet #{name} in #{target_region}")
-    ec2 = ec2_client(target_region)
+    Puppet.info("Creating subnet #{name}")
+    ec2 = ec2_client(resource[:region])
     vpc_response = ec2.describe_vpcs(filters: [
       {name: "tag:Name", values: [resource[:vpc]]},
     ])
@@ -103,8 +106,9 @@ Puppet::Type.type(:ec2_vpc_subnet).provide(:v2, :parent => PuppetX::Puppetlabs::
   end
 
   def destroy
-    Puppet.info("Deleting subnet #{name} in #{target_region}")
-    ec2_client(target_region).delete_subnet(
+    region = @property_hash[:region]
+    Puppet.info("Deleting subnet #{name} in #{region}")
+    ec2_client(region).delete_subnet(
       subnet_id: @property_hash[:id]
     )
     @property_hash[:ensure] = :absent

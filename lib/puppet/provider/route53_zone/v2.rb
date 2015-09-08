@@ -42,8 +42,10 @@ Puppet::Type.type(:route53_zone).provide(:v2, :parent => PuppetX::Puppetlabs::Aw
   def destroy
     Puppet.info("Deleting zone #{name}")
     zones = route53_client.list_hosted_zones.data.hosted_zones.select { |zone| zone.name == name }
-    zones.each do |zone|
-      route53_client.delete_hosted_zone(id: zone.id)
+    if zones
+      zones.each do |zone|
+        route53_client.delete_hosted_zone(id: zone.id)
+      end
     end
     @property_hash[:ensure] = :absent
   end

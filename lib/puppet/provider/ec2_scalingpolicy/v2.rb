@@ -44,18 +44,19 @@ Puppet::Type.type(:ec2_scalingpolicy).provide(:v2, :parent => PuppetX::Puppetlab
   end
 
   def exists?
-    Puppet.info("Checking if scaling policy #{name} exists in region #{target_region}")
+    dest_region = resource[:region] if resource
+    Puppet.info("Checking if scaling policy #{name} exists in region #{dest_region || region}")
     @property_hash[:ensure] == :present
   end
 
   def create
-    Puppet.info("Creating scaling policy #{name} in region #{target_region}")
+    Puppet.info("Creating scaling policy #{name} in region #{resource[:region]}")
     update
     @property_hash[:ensure] = :present
   end
 
   def update
-    autoscaling_client(target_region).put_scaling_policy(
+    autoscaling_client(resource[:region]).put_scaling_policy(
       policy_name: name,
       auto_scaling_group_name: resource[:auto_scaling_group],
       scaling_adjustment: resource[:scaling_adjustment],
@@ -68,11 +69,12 @@ Puppet::Type.type(:ec2_scalingpolicy).provide(:v2, :parent => PuppetX::Puppetlab
   end
 
   def destroy
-    Puppet.info("Deleting scaling policy #{name} in region #{target_region}")
-    autoscaling_client(target_region).delete_policy(
+    Puppet.info("Deleting scaling policy #{name} in region #{resource[:region]}")
+    autoscaling_client(resource[:region]).delete_policy(
       auto_scaling_group_name: resource[:auto_scaling_group],
       policy_name: name,
     )
     @property_hash[:ensure] = :absent
   end
 end
+

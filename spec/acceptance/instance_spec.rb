@@ -44,6 +44,7 @@ describe "ec2_instance" do
       #
       # When testing IAM roles you need to provide the IAM role name and the coresponding ARN.
       @config[:optional]['iam_instance_profile_name'] = ENV['IAM_ROLE_NAME'] if ENV['IAM_ROLE_NAME'] && ENV['IAM_ROLE_ARN']
+
       PuppetManifest.new(@template, @config).apply
       @instance = get_instance(@config[:name])
     end
@@ -143,8 +144,8 @@ describe "ec2_instance" do
     end
 
     def expect_failed_apply(config)
-      exit_code = PuppetManifest.new(@template, config).apply.exit_code
-      expect(exit_code.to_s).not_to match(/0/)
+      success = PuppetManifest.new(@template, config).apply[:exit_status].success?
+      expect(success).to eq(false)
 
       expect(@aws.get_instances(config[:name])).to be_empty
     end
@@ -272,7 +273,7 @@ describe "ec2_instance" do
     it 'launched as stopped' do
       config[:ensure] = 'stopped'
       r = PuppetManifest.new(@template, config).apply
-      expect(r.stderr).not_to match(/error/i)
+      expect(r[:output].any?{ |o| o.include?('Error:')}).to eq(false)
       instance = get_instance(config[:name])
       expect(['stopping', 'stopped']).to include(instance.state.name)
     end
@@ -280,7 +281,7 @@ describe "ec2_instance" do
     it 'launched as running' do
       config[:ensure] = 'running'
       r = PuppetManifest.new(@template, config).apply
-      expect(r.stderr).not_to match(/error/i)
+      expect(r[:output].any?{ |o| o.include?('Error:')}).to eq(false)
       instance = get_instance(config[:name])
       # without a wait this will return pending due to the EC2 lifecycle
       # the test here is that we can use running as an alias, so the wait isn't breaking that
@@ -317,7 +318,7 @@ describe "ec2_instance" do
       # set env variable and use puppet resource to inspect state of ec2 instance
       ENV['AWS_REGION'] = @config[:region]
       @result = TestExecutor.puppet_resource('ec2_instance', {:name => @config[:name]}, '--modulepath ../')
-      expect(@result.stderr).not_to match(/error/i)
+      expect(@result.stderr).not_to match(/\b/)
       # re-assign @instance for more up to date info
       @instance = get_instance(@config[:name])
     end

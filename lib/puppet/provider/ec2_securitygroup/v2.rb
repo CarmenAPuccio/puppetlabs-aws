@@ -10,23 +10,13 @@ Puppet::Type.type(:ec2_securitygroup).provide(:v2, :parent => PuppetX::Puppetlab
   def self.instances
     regions.collect do |region|
       begin
-        vpc_names = {}
-        vpc_response = ec2_client(region).describe_vpcs()
-        vpc_response.data.vpcs.each do |vpc|
-          vpc_name = name_from_tag(vpc)
-          vpc_names[vpc.vpc_id] = vpc_name if vpc_name
-        end
-
-        group_names = {}
-        groups = ec2_client(region).describe_security_groups.collect do |response|
+        groups = []
+        ec2_client(region).describe_security_groups.each do |response|
           response.data.security_groups.collect do |group|
-            group_names[group.group_id] = group.group_name || name_from_tag(group)
-            group
+            groups << new(security_group_to_hash(region, group))
           end
-        end.flatten
-        groups.collect do |group|
-          new(security_group_to_hash(region, group, group_names, vpc_names))
-        end.compact
+        end
+        groups
       rescue StandardError => e
         raise PuppetX::Puppetlabs::FetchingAWSDataError.new(region, self.resource_type.name.to_s, e.message)
       end
@@ -43,7 +33,7 @@ Puppet::Type.type(:ec2_securitygroup).provide(:v2, :parent => PuppetX::Puppetlab
     end
   end
 
-  def self.prepare_ingress_rule_for_puppet(region, rule, groups, group = nil, cidr = nil)
+  def self.prepare_ingress_rule_for_puppet(client, rule, group = nil, cidr = nil)
     config = {
       'protocol' => rule.ip_protocol,
       'from_port' => rule.from_port.to_i,
@@ -52,7 +42,11 @@ Puppet::Type.type(:ec2_securitygroup).provide(:v2, :parent => PuppetX::Puppetlab
     if group
       name = group.group_name
       if name.nil?
-        name = groups[group.group_id]
+        group_response = client.describe_security_groups(filters: [
+          {name: 'group-id', values: [group.group_id]}
+        ])
+        groups = group_response.data.security_groups
+        name = groups.empty? ? nil : groups.first.group_name
       end
       config['security_group'] = name
     end
@@ -60,30 +54,45 @@ Puppet::Type.type(:ec2_securitygroup).provide(:v2, :parent => PuppetX::Puppetlab
     config
   end
 
-  def self.format_ingress_rules(region, group, groups)
+  def self.format_ingress_rules(client, group)
     rules = []
     group[:ip_permissions].each do |rule|
       addition = []
       rule.user_id_group_pairs.each do |security_group|
-        addition << prepare_ingress_rule_for_puppet(region, rule, groups, security_group)
+        addition << prepare_ingress_rule_for_puppet(client, rule, security_group)
       end
       rule.ip_ranges.each do |cidr|
-        addition << prepare_ingress_rule_for_puppet(region, rule, groups, nil, cidr)
+        addition << prepare_ingress_rule_for_puppet(client, rule, nil, cidr)
       end
-      addition << prepare_ingress_rule_for_puppet(region, rule, groups) if addition.empty?
+      addition << prepare_ingress_rule_for_puppet(client, rule) if addition.empty?
       rules << addition
     end
     rules.flatten.uniq.compact
   end
 
-  def self.security_group_to_hash(region, group, groups, vpcs)
+  def self.security_group_to_hash(region, group)
+    ec2 = ec2_client(region)
+    vpc_name = nil
+    if group.vpc_id
+      vpc_response = ec2.describe_vpcs(
+        vpc_ids: [group.vpc_id]
+      )
+      vpc_name = if vpc_response.data.vpcs.empty?
+        nil
+      elsif vpc_response.data.vpcs.first.to_hash.keys.include?(:group_name)
+        vpc_response.data.vpcs.first.group_name
+      elsif vpc_response.data.vpcs.first.to_hash.keys.include?(:tags)
+        vpc_name_tag = vpc_response.data.vpcs.first.tags.detect { |tag| tag.key == 'Name' }
+        vpc_name_tag ? vpc_name_tag.value : nil
+      end
+    end
     {
       id: group.group_id,
       name: group.group_name,
       description: group.description,
       ensure: :present,
-      ingress: format_ingress_rules(region, group, groups),
-      vpc: vpcs[group.vpc_id],
+      ingress: format_ingress_rules(ec2, group),
+      vpc: vpc_name,
       vpc_id: group.vpc_id,
       region: region,
       tags: tags_for(group),
@@ -91,16 +100,14 @@ Puppet::Type.type(:ec2_securitygroup).provide(:v2, :parent => PuppetX::Puppetlab
   end
 
   def exists?
-    Puppet.info("Checking if security group #{name} exists in region #{target_region}")
+    dest_region = resource[:region] if resource
+    Puppet.info("Checking if security group #{name} exists in region #{dest_region || region}")
     @property_hash[:ensure] == :present
   end
 
-  def ec2
-    ec2_client(target_region)
-  end
-
   def create
-    Puppet.info("Creating security group #{name} in region #{target_region}")
+    Puppet.info("Creating security group #{name} in region #{resource[:region]}")
+    ec2 = ec2_client(resource[:region])
     config = {
       group_name: name,
       description: resource[:description]
@@ -204,8 +211,8 @@ Puppet::Type.type(:ec2_securitygroup).provide(:v2, :parent => PuppetX::Puppetlab
   end
 
   def destroy
-    Puppet.info("Deleting security group #{name} in region #{target_region}")
-    ec2.delete_security_group(
+    Puppet.info("Deleting security group #{name} in region #{resource[:region]}")
+    ec2_client(resource[:region]).delete_security_group(
       group_id: @property_hash[:id]
     )
     @property_hash[:ensure] = :absent
